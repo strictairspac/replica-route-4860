@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>收货地址拆分 · 新旧客户端并存演练</title>
+<style>
+:root {
+  --bg:#0f1420; --panel:#171e2e; --panel2:#1d2740; --line:#2a3650;
+  --txt:#e6ebf5; --muted:#8fa0bd; --accent:#5b9dff; --ok:#37c97e;
+  --warn:#f5a623; --err:#ff6b6b; --stash:#c084fc;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--txt);
+  font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+header { padding:16px 24px; border-bottom:1px solid var(--line);
+  display:flex; align-items:center; gap:16px; flex-wrap:wrap; background:var(--panel); }
+header h1 { font-size:18px; margin:0; }
+.badge { display:inline-block; padding:2px 10px; border-radius:999px;
+  font-size:12px; font-weight:600; }
+.badge.v1 { background:#5a3a1e; color:#ffc98a; }
+.badge.v2 { background:#143d2b; color:#7ff0b6; }
+.badge.legacy { background:#33415c; color:#b9c8e4; }
+.badge.split { background:#143d2b; color:#7ff0b6; }
+.badge.stashed { background:#402157; color:#e3c2ff; }
+.badge.confirmed { background:#123a5c; color:#9ccbff; }
+.wrap { display:grid; grid-template-columns: 1fr 380px; gap:16px; padding:16px 24px; }
+@media (max-width:1080px){ .wrap{grid-template-columns:1fr;} }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+@media (max-width:760px){ .grid2{grid-template-columns:1fr;} }
+.panel { background:var(--panel); border:1px solid var(--line);
+  border-radius:12px; padding:16px; margin-bottom:16px; }
+.panel h2 { font-size:14px; margin:0 0 12px; color:var(--accent);
+  text-transform:uppercase; letter-spacing:.08em; }
+button { background:var(--panel2); color:var(--txt); border:1px solid var(--line);
+  border-radius:8px; padding:7px 12px; cursor:pointer; font-size:13px; }
+button:hover { border-color:var(--accent); }
+button.primary { background:var(--accent); border-color:var(--accent); color:#08111f; font-weight:600; }
+button.danger { border-color:var(--err); color:#ffb3b3; }
+button:disabled { opacity:.45; cursor:not-allowed; }
+input, select { background:#0d1322; color:var(--txt); border:1px solid var(--line);
+  border-radius:8px; padding:7px 10px; font-size:13px; width:100%; }
+label { display:block; font-size:12px; color:var(--muted); margin:8px 0 4px; }
+.row { display:flex; gap:8px; align-items:end; flex-wrap:wrap; }
+.row > div { flex:1; min-width:120px; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line);
+  vertical-align:top; }
+th { color:var(--muted); font-weight:600; font-size:12px; }
+tr.sel { background:#1c2c4a; }
+.mono { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; }
+.muted { color:var(--muted); }
+.log { max-height:520px; overflow:auto; background:#0d1322; border:1px solid var(--line);
+  border-radius:8px; padding:10px; font-family:ui-monospace,Menlo,Consolas,monospace;
+  font-size:12px; }
+.log .e { padding:3px 0; border-bottom:1px dashed #1e2a42; }
+.log .kind { color:var(--accent); font-weight:600; }
+.log .reject { color:var(--err); }
+.log .ok { color:var(--ok); }
+.toast { position:fixed; right:20px; bottom:20px; max-width:420px; z-index:50; }
+.toast .t { margin-top:8px; padding:10px 14px; border-radius:10px; font-size:13px;
+  animation:slide .25s ease; border:1px solid var(--line); background:var(--panel2); }
+.toast .t.err { border-color:var(--err); }
+.toast .t.ok { border-color:var(--ok); }
+.toast .t.warn { border-color:var(--warn); }
+@keyframes slide { from{transform:translateY(8px);opacity:0;} to{transform:none;opacity:1;} }
+.scripts button { margin:0 6px 8px 0; }
+.pill { font-size:11px; padding:1px 7px; border-radius:6px; background:var(--panel2);
+  border:1px solid var(--line); color:var(--muted); margin-left:6px; }
+.replica-line { display:flex; gap:14px; flex-wrap:wrap; font-size:13px; margin-bottom:10px; }
+.replica-line b { color:var(--txt); }
+.small { font-size:12px; }
+ul.rules { margin:6px 0 0; padding-left:18px; color:var(--muted); }
+ul.rules li { margin:3px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>收货地址拆分演练</h1>
+  <span>系统模式：<span id="modeBadge" class="badge v1">v1</span></span>
+  <span class="muted small">主库位点 <b id="primarySeq" class="mono">0</b></span>
+  <span style="flex:1"></span>
+  <div class="scripts">
+    <button onclick="runScript('full')">▶ 完整剧本</button>
+    <button onclick="runScript('concurrent')">并发+迟到旧写</button>
+    <button onclick="runScript('stash')">无法拆分暂存</button>
+    <button onclick="runScript('replica')">副本读路由</button>
+    <button onclick="runScript('rollback')">回退再升级</button>
+    <button class="danger" onclick="resetAll()">重置</button>
+  </div>
+</header>
+
+<div class="wrap">
+<div>
+  <!-- 模式与副本 -->
+  <div class="panel">
+    <h2>① 模式编排（升级 / 回退）与副本状态</h2>
+    <div class="grid2">
+      <div>
+        <div class="row">
+          <div><button id="btnV2" class="primary" onclick="setMode('v2')">升级到 v2（启用拆分）</button></div>
+          <div><button id="btnV1" onclick="setMode('v1')">回退到 v1（旧版）</button></div>
+        </div>
+        <ul class="rules small">
+          <li>v2：新端可写门牌/街道；旧端整段写自动拆分或暂存</li>
+          <li>v1：新端写被模式闸门拒绝；旧端整段读写照常，改动标记 dirty</li>
+          <li>再升级：重放全部事件，dirty 订单重新转换，已确认门牌保留</li>
+        </ul>
+      </div>
+      <div>
+        <div class="replica-line">
+          <span>副本位点 <b id="repSeq" class="mono">0</b>/<b id="repMax" class="mono">0</b></span>
+          <span>格式 <b id="repFmt">legacy</b></span>
+          <span>状态 <b id="repOnline">在线</b></span>
+        </div>
+        <div class="row">
+          <div><button onclick="repCmd('catchup')">副本追平写入</button></div>
+          <div><button onclick="repCmd('split')">副本切换 split 格式</button></div>
+          <div><button onclick="repCmd('legacy')">副本回 legacy 格式</button></div>
+          <div><button onclick="repCmd('toggleOnline')">上线/下线</button></div>
+        </div>
+        <p class="muted small">追平写入 ≠ 换格式：legacy 副本对新端读返回 409 并指明回主库。</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 订单与读写 -->
+  <div class="panel">
+    <h2>② 接单与订单状态（点击行选中）</h2>
+    <div class="row">
+      <div><label>新订单整段地址（接单不判断能否拆分）</label>
+        <input id="newAddr" value="栖原市港区临港大道188号"></div>
+      <div style="flex:0 0 auto"><label>&nbsp;</label>
+        <button class="primary" onclick="createOrder()">接单</button></div>
+      <div style="flex:0 0 auto"><label>&nbsp;</label>
+        <button onclick="createBadOrder()">接一单无法拆分的</button></div>
+    </div>
+    <table style="margin-top:12px">
+      <thead><tr><th>订单</th><th>状态</th><th>整段地址（旧端视图）</th>
+        <th>街道</th><th>门牌</th><th>版本</th></tr></thead>
+      <tbody id="orderRows"></tbody>
+    </table>
+  </div>
+
+  <div class="grid2">
+    <!-- 写操作 -->
+    <div class="panel">
+      <h2>③ 写入（并发 / 锁 / 幂等）</h2>
+      <p class="muted small mono" id="selHint">未选中订单</p>
+      <label>客户端</label>
+      <select id="wClient">
+        <option value="old">旧端 old（整段地址）</option>
+        <option value="new">新端 new（街道/门牌）</option>
+      </select>
+      <div id="oldFields">
+        <label>整段地址</label><input id="wFull" value="栖原市港区临港大道999号">
+      </div>
+      <div id="newFields" style="display:none">
+        <label>字段</label>
+        <select id="wField"><option value="house">门牌 house（写入即确认）</option>
+          <option value="street">街道 street</option></select>
+        <label>值</label><input id="wValue" value="188号">
+      </div>
+      <label>expected_version（乐观锁 CAS，默认当前版本）</label>
+      <input id="wVersion" type="number" value="0">
+      <label>request_id（留空自动生成；重试时保持相同）</label>
+      <div class="row">
+        <div><input id="wRid" placeholder="req-..."></div>
+        <div style="flex:0 0 auto"><button onclick="genRid()">生成</button></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div style="flex:0 0 auto"><button class="primary" onclick="doWrite()">提交写入</button></div>
+        <div style="flex:0 0 auto"><button onclick="doRetry()">同 request_id 重试</button></div>
+        <div style="flex:0 0 auto"><button onclick="doLostWrite()">模拟响应丢失后重试</button></div>
+      </div>
+      <label style="margin-top:12px">迁移 / 人工处置</label>
+      <div class="row">
+        <div style="flex:0 0 auto"><button onclick="doMigrate()">转换选中订单</button></div>
+        <div style="flex:0 0 auto"><button onclick="doManual()">人工拆分暂存单</button></div>
+      </div>
+    </div>
+
+    <!-- 读操作 -->
+    <div class="panel">
+      <h2>④ 读取（主库 / 副本，新旧端视图）</h2>
+      <div class="row">
+        <div><label>读取客户端</label>
+          <select id="rClient"><option value="new">新端 new（street/house）</option>
+            <option value="old">旧端 old（整段）</option></select></div>
+        <div><label>读取来源</label>
+          <select id="rSource"><option value="primary">主库</option>
+            <option value="replica">副本</option></select></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div style="flex:0 0 auto"><button class="primary" onclick="doRead()">读取选中订单</button></div>
+      </div>
+      <label style="margin-top:12px">最近一次读取结果与路由</label>
+      <pre id="readOut" class="log" style="max-height:260px">（尚未读取）</pre>
+    </div>
+  </div>
+</div>
+
+<!-- 右侧：日志与任务 -->
+<div>
+  <div class="panel">
+    <h2>⑤ 人工处置任务</h2>
+    <table><thead><tr><th>订单</th><th>原因</th><th>状态</th></tr></thead>
+      <tbody id="taskRows"></tbody></table>
+  </div>
+  <div class="panel">
+    <h2>⑥ 事件日志（追加不修改 · 位点 = seq）</h2>
+    <div class="log" id="eventLog"></div>
+  </div>
+</div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
